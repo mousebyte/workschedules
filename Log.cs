@@ -11,6 +11,7 @@ namespace workschedule
             Error,
             Info
         }
+
         private readonly TextWriter _writer;
 
         public Log(TextWriter writer)
@@ -19,7 +20,6 @@ namespace workschedule
             _writer.WriteLine($"Begin log {DateTime.Now:G}");
         }
 
-        
 
         public async void WriteAsync(EventType eventType, string first, params string[] s)
         {
@@ -29,7 +29,7 @@ namespace workschedule
 
         private async Task WriteInternalAsync(string head, string tail)
         {
-            await _writer.WriteAsync($"{head,12} {tail}");
+            await _writer.WriteLineAsync($"{head,12} {tail}");
         }
 
         private async Task WriteInternalAsync(string s)
