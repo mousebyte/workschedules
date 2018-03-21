@@ -1,14 +1,11 @@
 ﻿using System;
 using System.IO;
-using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Tasks;
 using Google.Apis.Auth.OAuth2;
 using Google.Apis.Calendar.v3;
-using Google.Apis.Calendar.v3.Data;
 using Google.Apis.Gmail.v1;
-using Google.Apis.Gmail.v1.Data;
-using Google.Apis.Services;
 using Google.Apis.Util.Store;
 
 namespace workschedule
@@ -22,7 +19,7 @@ namespace workschedule
             @"(?<date>\d{2}\/\d{2}): (?<in>\d{2}:\d{2}\w)(?:.*?)(?<out>\d{2}:\d{2}\w)(?= \w{3}\d{3}\s?\r)",
             RegexOptions.Compiled);
 
-        private static void Main()
+        private static async Task Main()
         {
             UserCredential credential;
             using (var stream = new FileStream("client_secret.json", FileMode.Open, FileAccess.Read))
@@ -37,11 +34,10 @@ namespace workschedule
             {
                 DateFormat = "MM/dd hh:mmt",
                 MessageQuery = "from:WorkSchedules@dillards.com",
-                ColorId = "2"
+                ColorId = "2",
+                Log = new Log(Console.Out)
             };
-            var s = "03/20: 12:11P";
-            var d = DateTime.ParseExact(s, "MM/dd: hh:mmt", null);
-            Console.WriteLine(d);
+            await parser.PopulateCalendarAsync();
             Console.Read();
         }
     }

@@ -15,11 +15,29 @@ using Google.Apis.Services;
 
 namespace workschedule
 {
+    class Log
+    {
+        public enum EventType
+        {
+            Error,
+            Info
+        }
+        private TextWriter _writer;
+
+        public Log(TextWriter writer)
+        {
+            _writer = writer;
+            _writer.WriteLine($"Begin log {DateTime.Now:G}");
+        }
+
+        public async void WriteAsync(string s, EventType eventType)
+        {
+            await _writer.WriteLineAsync($"    [{DateTime.Now:T}] {eventType:G} - {s}");
+        }
+    }
     class MailParser
     {
         private readonly Regex _regex;
-
-        private readonly UserCredential _credential;
 
         private readonly CalendarService _calendarService;
 
@@ -37,12 +55,11 @@ namespace workschedule
 
         public string ColorId { get; set; }
 
-        public TextWriter Log { private get; set; }
+        public Log Log { private get; set; }
 
         public MailParser(string applicationName, Regex regex, UserCredential credential)
         {
             _regex = regex;
-            _credential = credential;
             _calendarService = new CalendarService(new BaseClientService.Initializer
             {
                 HttpClientInitializer = credential,
@@ -53,14 +70,13 @@ namespace workschedule
                 HttpClientInitializer = credential,
                 ApplicationName = applicationName
             });
-
             UserId = "me";
             CalendarId = "primary";
             Summary = "Work";
             ColorId = "1";
         }
 
-        public bool PopulateCalendar()
+        public async Task<bool> PopulateCalendarAsync()
         {
             var msgResponse = new UsersResource.MessagesResource.ListRequest(_mailService, UserId)
             {
@@ -73,27 +89,33 @@ namespace workschedule
             {
                 msg = msgResponse.Messages.Single();
             }
-            catch (InvalidOperationException e)
+            catch (InvalidOperationException)
             {
-                Console.WriteLine(e);
-                throw;
+                Log.WriteAsync("Failed to retrieve source message: Query did not return exactly 1 match.", Log.EventType.Error);
+                return false;
             }
 
             //Get the body of the message as a string and find all matches
-            var body = MailParser.ConvertPayloadBody(_mailService.Users.Messages.Get(UserId, msg.Id).Execute());
-            var matches = _regex.Matches(body);
+            var body = ConvertPayloadBody(_mailService.Users.Messages.Get(UserId, msg.Id).Execute());
 
-            //Insert a new calendar entry for each match
-            foreach (Match match in matches)
-                _calendarService.Events.Insert(ParseMatch(match), CalendarId).Execute();
+            var insertTask =
+                Task.WhenAll(
+                    _regex.Matches(body).Cast<Match>().Select(async m => await InsertEventAsync(ParseMatch(m))));
 
-            //Remove the inbox label from the message when done so that it isn't seen next time the program runs.
-            //This has the same effect as archiving the message in gmail.
-            _mailService.Users.Messages.Modify(new ModifyMessageRequest
+            await _mailService.Users.Messages.Modify(new ModifyMessageRequest
             {
-                RemoveLabelIds = {"INBOX"}
-            }, UserId, msg.Id);
+                RemoveLabelIds = new[] {"INBOX"}
+            }, UserId, msg.Id).ExecuteAsync();
+
+            await insertTask;
+            Log.WriteAsync("Finished creating events.", Log.EventType.Info);
             return true;
+        }
+
+        private async Task InsertEventAsync(Event e)
+        {
+            await _calendarService.Events.Insert(e, CalendarId).ExecuteAsync();
+            Log.WriteAsync($"Created event '{e.Summary} {e.Start.DateTime:d}'", Log.EventType.Info);
         }
 
         private Event ParseMatch(Match match)
