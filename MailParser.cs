@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -15,27 +14,7 @@ using Google.Apis.Services;
 
 namespace workschedule
 {
-    class Log
-    {
-        public enum EventType
-        {
-            Error,
-            Info
-        }
-        private TextWriter _writer;
-
-        public Log(TextWriter writer)
-        {
-            _writer = writer;
-            _writer.WriteLine($"Begin log {DateTime.Now:G}");
-        }
-
-        public async void WriteAsync(string s, EventType eventType)
-        {
-            await _writer.WriteLineAsync($"    [{DateTime.Now:T}] {eventType:G} - {s}");
-        }
-    }
-    class MailParser
+    public class MailParser
     {
         private readonly Regex _regex;
 
@@ -74,48 +53,66 @@ namespace workschedule
             CalendarId = "primary";
             Summary = "Work";
             ColorId = "1";
+            Log.WriteAsync(Log.EventType.Info, $"Created new MailParser for {applicationName}");
         }
 
         public async Task<bool> PopulateCalendarAsync()
         {
-            var msgResponse = new UsersResource.MessagesResource.ListRequest(_mailService, UserId)
+            Log.WriteAsync(Log.EventType.Info, "Requesting messages...", $"User ID: {UserId}", $"Query: {MessageQuery}");
+            var msgResponse = await new UsersResource.MessagesResource.ListRequest(_mailService, UserId)
             {
-                Q = MessageQuery, //"from:WorkSchedules@dillards.com",
+                Q = MessageQuery,
                 LabelIds = "INBOX"
-            }.Execute();
+            }.ExecuteAsync();
+            Log.WriteAsync(Log.EventType.Info, "Response recieved.");
 
             Message msg;
             try
             {
                 msg = msgResponse.Messages.Single();
+                Log.WriteAsync(Log.EventType.Info, $"Source message {msg.Id} found.");
             }
             catch (InvalidOperationException)
             {
-                Log.WriteAsync("Failed to retrieve source message: Query did not return exactly 1 match.", Log.EventType.Error);
+                Log.WriteAsync(Log.EventType.Error,
+                    "Failed to retrieve source message: Query returned more than one match.",
+                    $"Match Count: {msgResponse.Messages.Count}",
+                    $"Match IDs: {msgResponse.Messages.Aggregate("", (s, message) => $"{s}, {message.Id}")}");
+                return false;
+            }
+            catch (ArgumentNullException)
+            {
+                Log.WriteAsync(Log.EventType.Error, "Failed to retrieve source message: Query returned no matches.");
                 return false;
             }
 
             //Get the body of the message as a string and find all matches
+            Log.WriteAsync(Log.EventType.Info, "Converting message body...");
             var body = ConvertPayloadBody(_mailService.Users.Messages.Get(UserId, msg.Id).Execute());
+            Log.WriteAsync(Log.EventType.Info, "Message body converted.");
 
+            Log.WriteAsync(Log.EventType.Info, "Starting event insertion...");
             var insertTask =
                 Task.WhenAll(
                     _regex.Matches(body).Cast<Match>().Select(async m => await InsertEventAsync(ParseMatch(m))));
 
-            await _mailService.Users.Messages.Modify(new ModifyMessageRequest
+            
+            _mailService.Users.Messages.Modify(new ModifyMessageRequest
             {
                 RemoveLabelIds = new[] {"INBOX"}
-            }, UserId, msg.Id).ExecuteAsync();
+            }, UserId, msg.Id).Execute();
+            Log.WriteAsync(Log.EventType.Info, "Source message sent to archive.");
 
             await insertTask;
-            Log.WriteAsync("Finished creating events.", Log.EventType.Info);
+            Log.WriteAsync(Log.EventType.Info, "Finished creating events.");
             return true;
         }
 
         private async Task InsertEventAsync(Event e)
         {
             await _calendarService.Events.Insert(e, CalendarId).ExecuteAsync();
-            Log.WriteAsync($"Created event '{e.Summary} {e.Start.DateTime:d}'", Log.EventType.Info);
+            Log.WriteAsync(Log.EventType.Info, $"Created event '{e.Summary}'", $"Date: {e.Start.DateTime:d}",
+                $"Time: {e.Start.DateTime:hh:mm tt}-{e.End.DateTime:hh:mm tt}");
         }
 
         private Event ParseMatch(Match match)
